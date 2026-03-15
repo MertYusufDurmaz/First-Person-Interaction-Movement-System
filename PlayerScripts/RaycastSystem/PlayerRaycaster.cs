@@ -1,62 +1,48 @@
-﻿using UnityEngine;
+using UnityEngine;
 using TMPro;
-using UnityEngine.EventSystems; // UI Tıklamalarını algılamak için ŞART!
+using UnityEngine.EventSystems;
 
 public class PlayerRaycaster : MonoBehaviour
 {
-    private Camera mainCamera;
-    private Ray ray;
-    private RaycastHit hit;
-    private ITargetable currentTargetable;
-    private ICollectable currentCollectable;
-
+    [Header("References")]
+    [SerializeField] private Camera mainCamera;
     [SerializeField] private InspectionHandler inspectionHandler;
     [SerializeField] private PlayerControllerHandler playerControllerHandler;
     [SerializeField] private TextMeshProUGUI interactionText;
+    
+    [Header("Settings")]
     [SerializeField] private float raycastDistance = 3f;
+
+    private ITargetable currentTargetable;
 
     void Start()
     {
-        mainCamera = Camera.main;
-        if (inspectionHandler == null)
-            inspectionHandler = GetComponent<InspectionHandler>();
-        if (playerControllerHandler == null)
-            playerControllerHandler = GetComponent<PlayerControllerHandler>();
-        if (interactionText != null)
-            interactionText.text = "";
+        if (mainCamera == null) mainCamera = Camera.main;
+        if (inspectionHandler == null) inspectionHandler = GetComponent<InspectionHandler>();
+        if (playerControllerHandler == null) playerControllerHandler = GetComponent<PlayerControllerHandler>();
+        if (interactionText != null) interactionText.text = "";
     }
 
     void Update()
     {
-        // --- 1. UI KONTROLÜ (BU SATIR SORUNU ÇÖZER) ---
-        // Eğer mouse bir UI elemanının (Kasa tuşları vb.) üzerindeyse Raycast atma.
-        // Böylece arkadaki kasaya tekrar tıklayıp animasyonu bozmazsın.
+        // UI'ın üzerine gelindiyse dünyadaki objeleri taramayı bırak
         if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
         {
             ClearCurrentTarget();
             return;
         }
 
-        HandleRaycastAndHighlight();
+        HandleRaycast();
         HandleInput();
     }
 
-    private void HandleRaycastAndHighlight()
+    private void HandleRaycast()
     {
-        ray = mainCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0));
-        bool foundTarget = false;
-
-        // Trigger'ları (Enemy alanlarını) yoksaymak için 'QueryTriggerInteraction.Ignore' kullanıyoruz
-        if (Physics.Raycast(ray, out hit, raycastDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+        Ray ray = mainCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0));
+        
+        if (Physics.Raycast(ray, out RaycastHit hit, raycastDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
         {
-            ITargetable targetable = null;
-
-            // Önce çarptığımız objede script var mı?
-            if (!hit.collider.TryGetComponent(out targetable))
-            {
-                // Yoksa ebeveyninde (Parent) var mı? (Kapı koluna tıklayınca kapıyı bulsun diye)
-                targetable = hit.collider.GetComponentInParent<ITargetable>();
-            }
+            ITargetable targetable = hit.collider.GetComponentInParent<ITargetable>();
 
             if (targetable != null)
             {
@@ -66,144 +52,94 @@ public class PlayerRaycaster : MonoBehaviour
                     currentTargetable = targetable;
                     currentTargetable.ToggleHighlight(true);
                 }
-                foundTarget = true;
-                currentCollectable = targetable as ICollectable;
-            }
-            else if (hit.transform.CompareTag("ExitDoor"))
-            {
-                ExitDoor exitDoor = hit.collider.GetComponentInParent<ExitDoor>();
-                if (exitDoor != null)
-                {
-                    if (currentTargetable != exitDoor)
-                    {
-                        ClearCurrentTarget();
-                        currentTargetable = exitDoor;
-                        currentTargetable.ToggleHighlight(true);
-                    }
-                    foundTarget = true;
-                }
-            }
-        }
 
-        // UI Yazısı Güncelleme
-        if (interactionText != null)
-        {
-            if (foundTarget)
-            {
-                if (currentCollectable != null)
-                {
-                    if (currentCollectable is Diary) interactionText.text = "E'ye Bas (Günlük Oku)";
-                    else if (currentCollectable is Battery) interactionText.text = "E'ye Bas (Pil Topla)";
-                    else if (currentCollectable is Key key) interactionText.text = key != null ? key.InteractionText : "E'ye Bas (Topla)";
-                    else if (currentCollectable is FlashlightCollectable) interactionText.text = "E'ye Bas (Fener Topla)";
-                    else interactionText.text = "E'ye Bas";
-                }
-                else if (currentTargetable is ExitDoor exitDoor)
-                {
-                    interactionText.text = exitDoor != null ? exitDoor.InteractionText : "E'ye Bas (Kapıyı Aç)";
-                }
+                UpdateInteractionText(hit.transform, targetable);
             }
             else
             {
-                interactionText.text = "";
+                ClearCurrentTarget();
             }
         }
+        else
+        {
+            ClearCurrentTarget();
+        }
+    }
 
-        if (!foundTarget) ClearCurrentTarget();
+    private void UpdateInteractionText(Transform hitTransform, ITargetable targetable)
+    {
+        if (interactionText == null) return;
+
+        // Obje incelenebilir bir objeyse
+        if (hitTransform.CompareTag("Object"))
+        {
+            interactionText.text = "E'ye Bas (İncele)";
+            return;
+        }
+
+        // ICollectable ise özel mesajlar
+        if (targetable is ICollectable collectable)
+        {
+            if (collectable is Diary) interactionText.text = "E'ye Bas (Günlük Oku)";
+            else if (collectable is Battery) interactionText.text = "E'ye Bas (Pil Topla)";
+            else if (collectable is Key key) interactionText.text = key.InteractionText;
+            else interactionText.text = "E'ye Bas (Topla)";
+        }
+        // Geri kalan her şey (Kapı, Kasa, Çekmece) için genel mesaj
+        else
+        {
+            interactionText.text = "E'ye Bas / Tıkla (Etkileşime Gir)";
+        }
     }
 
     private void HandleInput()
     {
-        // Tıklama Algılama (Yine Trigger Ignore ile)
+        if (currentTargetable == null) return;
+
+        Ray ray = mainCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0));
+        if (!Physics.Raycast(ray, out RaycastHit hit, raycastDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) 
+            return;
+
+        // 1. SOL TIK (Genel Etkileşimler: Kapı, Kasa, Çekmece)
         if (Input.GetMouseButtonDown(0))
         {
-            ray = mainCamera.ViewportPointToRay(new Vector3(0.5f, 0.5f, 0));
-
-            if (Physics.Raycast(ray, out hit, raycastDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+            if (hit.transform.CompareTag("Object") && inspectionHandler != null)
             {
-                // 🔹 Çekmece (Parent Kontrolü ile)
-                DrawerController drawer = hit.collider.GetComponentInParent<DrawerController>();
-                if (drawer != null)
-                {
-                    drawer.ToggleDrawer();
-                    return;
-                }
+                inspectionHandler.StartInspection(hit.transform.gameObject, hit.transform.position, hit.transform.rotation);
+                if (playerControllerHandler != null) playerControllerHandler.DisablePlayerControls();
+                ClearCurrentTarget();
+                return;
+            }
 
-                // 🔹 Kapı (Parent Kontrolü ile)
-                SimpleDoorOpener door = hit.collider.GetComponentInParent<SimpleDoorOpener>();
-                if (door != null)
-                {
-                    door.ToggleDoor();
-                    return;
-                }
-
-                // 🔹 Soru Kasası (Parent Kontrolü ile)
-                questionSafeController questionSafe = hit.collider.GetComponentInParent<questionSafeController>();
-                if (questionSafe != null)
-                {
-                    if (!questionSafe.isUnlocked)
-                    {
-                        questionSafe.OpenQuestionCanvas();
-                        return;
-                    }
-                }
-
-                // 🔹 Şifreli Kasa (SafeController)
-                SafeController safe = hit.collider.GetComponentInParent<SafeController>();
-                if (safe != null)
-                {
-                    if (!safe.isUnlocked)
-                    {
-                        safe.OpenSafeUI();
-                        return;
-                    }
-                }
-
-                // 🔹 Obje İnceleme
-                if (hit.transform.CompareTag("Object"))
-                {
-                    if (inspectionHandler != null)
-                    {
-                        // Fener kontrolünü kaldırdık, el doluyken de inceleyebilirsin.
-                        inspectionHandler.StartInspection(hit.transform.gameObject, hit.transform.position, hit.transform.rotation);
-                        if (playerControllerHandler != null) playerControllerHandler.DisablePlayerControls();
-                    }
-                    return;
-                }
+            // MUCİZE BURADA: Kapı mı, çekmece mi diye sormuyoruz. Sadece "Çalıştır" diyoruz.
+            if (!(currentTargetable is ICollectable))
+            {
+                currentTargetable.Interact(); 
             }
         }
 
-        // 🔹 E Tuşu ile Toplama
-        if (Input.GetKeyDown(KeyCode.E) && currentTargetable != null)
+        // 2. E TUŞU (Toplama İşlemleri)
+        if (Input.GetKeyDown(KeyCode.E) && currentTargetable is ICollectable currentCollectable)
         {
-            if (currentCollectable != null)
+            if (currentCollectable is Diary diary)
             {
-                if (currentCollectable is Diary diary)
-                {
-                    currentCollectable.AddToInventory();
-                    diary.OpenDiaryCanvas();
-                }
-                else if (currentCollectable is FlashlightCollectable flashlight)
-                {
-                    currentCollectable.AddToInventory();
-                    // InventoryManager varsa kullan
-                    if (flashlight.ItemDataProperty != null && InventoryManager.Instance != null)
-                        InventoryManager.Instance.EquipItemFromInventory(flashlight.ItemDataProperty.itemPrefab);
-                }
-                else if (currentCollectable is Battery battery)
-                {
-                    battery.OnCollect();
-                }
-                else
-                {
-                    currentCollectable.AddToInventory();
-                }
+                currentCollectable.AddToInventory();
+                diary.OpenDiaryCanvas();
             }
-            else if (currentTargetable is ExitDoor exitDoor)
+            else if (currentCollectable is Battery battery)
             {
-                exitDoor.Interact();
+                battery.OnCollect();
             }
-
+            else if (currentCollectable is FlashlightCollectable flashlight)
+            {
+                currentCollectable.AddToInventory();
+                if (flashlight.ItemDataProperty != null && InventoryManager.Instance != null)
+                    InventoryManager.Instance.EquipItemFromInventory(flashlight.ItemDataProperty.itemPrefab);
+            }
+            else
+            {
+                currentCollectable.AddToInventory();
+            }
             ClearCurrentTarget();
         }
     }
@@ -214,10 +150,8 @@ public class PlayerRaycaster : MonoBehaviour
         {
             currentTargetable.ToggleHighlight(false);
             currentTargetable = null;
-            currentCollectable = null;
         }
 
-        if (interactionText != null)
-            interactionText.text = "";
+        if (interactionText != null) interactionText.text = "";
     }
 }
